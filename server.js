@@ -1,71 +1,134 @@
-import express from "express";
+import http from "http";
+import { WebSocketServer, WebSocket } from "ws";
 
-import expressWs from "express-ws";
+import { randomUUID } from "crypto";
 
-// Create a server
-const server = express();
-// Added websocket features
-expressWs(server);
+const PORT = 3000;
 
-const port = 3000;
 
-let clients = {};
+const rooms = new Map();
 
-let messages = [];
+function getRoom(name) {
+  if (!rooms.has(name)) {
+    rooms.set(name, {
+      clients: new Map(),
+      state: { captured: {}, tank: {} },
+    });
+  }
+  return rooms.get(name);
+}
 
-let global_id = 0;
+function broadcast(roomObj, msg, exceptId = null) {
+  const data = JSON.stringify(msg);
+  for (const [id, client] of roomObj.clients.entries()) {
+    if (exceptId && id === exceptId) continue;
+    if (client.readyState === WebSocket.OPEN) {
+      client.send(data);
+    }
+  }
+}
 
-// Set up a websocket endpoint
-server.ws("/", (client) => {
-  // Figure out the client's id
-  let id = global_id++;
 
-  console.log(`${id} connected`)
+const server = http.createServer((req, res) => {
 
-  send(client, {
-    type: "welcome",
-    id,
-    connected: Object.keys(clients),
-    messages,
-  });
 
-  broadcast({ type: "connected", id });
+  res.writeHead(200, { "Content-Type": "text/plain" });
+  res.end("WS server running.\n");
+});
 
-  clients[id] = client;
+const wss = new WebSocketServer({ server, path: "/ws" });
 
-  client.on("message", (dataString) => {
-    let event = JSON.parse(dataString);
+wss.on("connection", (ws, req) => {
+  const url = new URL(req.url, `http://${req.headers.host}`);
+  const roomName = (url.searchParams.get("room") || "default").trim() || "default";
+  const roomObj = getRoom(roomName);
 
-    if (event.type === "client_message") {
-      let { content } = event;
+  // two users only
+  if (roomObj.clients.size >= 2) {
+    ws.send(JSON.stringify({ type: "room_full" }));
+    ws.close();
+    return;
+  }
 
-      let message = { content, time: Date.now(), sender: id };
+  const id = randomUUID();
+  roomObj.clients.set(id, ws);
 
-      messages.push(message);
+  ws.send(
+    JSON.stringify({
+      type: "welcome",
+      id,
+      state: roomObj.state,
+    })
+  );
 
-      broadcast({
-        type: "server_message",
-        ...message,
-      });
+  ws.on("message", (raw) => {
+    let data;
+    try {
+      data = JSON.parse(String(raw));
+    } catch {
+      return;
+    }
+    if (!data || typeof data.type !== "string") return;
+
+
+    const x = Number(data.x);
+    const y = Number(data.y);
+
+    if (data.type === "cursor") {
+      if (!Number.isFinite(x) || !Number.isFinite(y)) return;
+      broadcast(roomObj, { type: "cursor", x, y }, id);
+      return;
+    }
+
+    if (data.type === "ping") {
+      if (!Number.isFinite(x) || !Number.isFinite(y)) return;
+      broadcast(roomObj, { type: "ping", x, y }, id);
+      return;
+    }
+
+    if (data.type === "capture") {
+      const creatureId = String(data.creatureId || "");
+      if (!creatureId) return;
+
+      roomObj.state.captured[creatureId] = true;
+
+   
+      broadcast(roomObj, { type: "captured", creatureId }, null);
+      return;
+    }
+
+    if (data.type === "tank_move") {
+      const creatureId = String(data.creatureId || "");
+      if (!creatureId) return;
+      if (!Number.isFinite(x) || !Number.isFinite(y)) return;
+
+      const vx = Number(data.vx) || 0;
+      const vy = Number(data.vy) || 0;
+
+      roomObj.state.tank[creatureId] = { x, y, vx, vy };
+
+      broadcast(
+        roomObj,
+        {
+          type: "tank_move",
+          creatureId,
+          x,
+          y,
+          vx,
+          vy,
+        },
+        id
+      );
+      return;
     }
   });
 
-  client.on("close", () => {
-    console.log(`${id} disconnected`)
-    delete clients[id];
-    broadcast({ type: "disconnected", id });
+  ws.on("close", () => {
+    roomObj.clients.delete(id);
+    if (roomObj.clients.size === 0) rooms.delete(roomName);
   });
 });
 
-// Start the server
-server.listen(port, "0.0.0.0", () => {});
-
-function send(client, message) {
-  client.send(JSON.stringify(message));
-}
-
-function broadcast(message) {
-  for (let client of Object.values(clients)) {
-    send(client, message);
-  }
-}
+server.listen(PORT, () => {
+  console.log(`WS server listening on http://localhost:${PORT} (path: /ws)`);
+});
