@@ -1,0 +1,40 @@
+html, body {
+    margin: 0;
+    padding: 0;
+    height: 100%;
+    overflow: hidden;
+    background: #000;
+  }
+  
+  canvas {
+    display: block;
+    width: 100vw;
+    height: 100vh;
+    background: #000; 
+  }
+  
+
+  body::before{
+    content:"";
+    position:fixed;
+    inset:0;
+    pointer-events:none;
+    background:
+      radial-gradient(circle, rgba(255,255,255,0.06) 1px, transparent 1.6px);
+    background-size: 6px 6px;
+    opacity: 0.18;
+    mix-blend-mode: screen;
+  }
+  
+
+  body::after{
+    content:"";
+    position:fixed;
+    inset:-30px;
+    pointer-events:none;
+    background: radial-gradient(circle at 50% 35%,
+      rgba(0,0,0,0) 0%,
+      rgba(0,0,0,0.35) 55%,
+      rgba(0,0,0,0.75) 100%);
+  }
+  
